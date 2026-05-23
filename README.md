@@ -22,11 +22,36 @@ define a small, reliable Rust core that can grow into:
 ```bash
 cargo run -- doctor
 cargo run -- smoke --url http://127.0.0.1:3000 --expect Axonyx
+cargo run -- test --config aegis.toml
 cargo run -- browser
 ```
 
 `smoke` supports both local `http://` URLs and deployed `https://` URLs. A real
 browser engine is reserved for the next phase.
+
+## Config Smoke Suites
+
+For React, Next, or Axonyx sites, create `aegis.toml`:
+
+```toml
+base_url = "https://react.axonyx.dev"
+
+[[smoke]]
+name = "home"
+path = "/"
+expect = "Axonyx"
+
+[[smoke]]
+name = "docs"
+path = "/docs/getting-started"
+expect = "Getting Started"
+```
+
+Then run:
+
+```bash
+aegis test --config aegis.toml
+```
 
 ## Intended Axonyx Integration
 

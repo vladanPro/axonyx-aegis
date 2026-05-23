@@ -1,4 +1,7 @@
+use serde::Deserialize;
 use std::fmt;
+use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -8,6 +11,7 @@ pub enum Command {
     Help,
     Doctor,
     Smoke(SmokeArgs),
+    Test(TestArgs),
     Browser,
 }
 
@@ -34,6 +38,40 @@ pub struct SmokeReport {
     pub status: u16,
     pub body_bytes: usize,
     pub matched_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestArgs {
+    pub config: PathBuf,
+}
+
+impl Default for TestArgs {
+    fn default() -> Self {
+        Self {
+            config: PathBuf::from("aegis.toml"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct AegisConfig {
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub smoke: Vec<SmokeCheckConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct SmokeCheckConfig {
+    pub name: Option<String>,
+    pub path: Option<String>,
+    pub url: Option<String>,
+    pub expect: Option<String>,
+    #[serde(default = "default_status")]
+    pub status: u16,
+}
+
+fn default_status() -> u16 {
+    200
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +122,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
             }
             Ok(())
         }
+        Command::Test(args) => run_test_suite(&args),
         Command::Browser => {
             println!("Aegis browser engine is reserved for the next phase.");
             println!("Planned shape:");
@@ -106,6 +145,7 @@ pub fn parse_command(args: impl IntoIterator<Item = String>) -> Result<Command> 
     match command.as_str() {
         "doctor" => Ok(Command::Doctor),
         "smoke" => parse_smoke_args(args).map(Command::Smoke),
+        "test" => parse_test_args(args).map(Command::Test),
         "browser" => Ok(Command::Browser),
         other => Err(AegisError::new(format!(
             "unknown command '{other}'. Run `aegis --help`."
@@ -160,6 +200,37 @@ fn parse_smoke_args(args: Vec<String>) -> Result<SmokeArgs> {
     Ok(smoke)
 }
 
+fn parse_test_args(args: Vec<String>) -> Result<TestArgs> {
+    let mut test = TestArgs::default();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--config" | "-c" => {
+                index += 1;
+                test.config = PathBuf::from(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| AegisError::new("--config requires a value"))?,
+                );
+            }
+            "-h" | "--help" => {
+                print_test_help();
+                return Ok(test);
+            }
+            other => {
+                return Err(AegisError::new(format!(
+                    "unknown test option '{other}'. Run `aegis test --help`."
+                )));
+            }
+        }
+
+        index += 1;
+    }
+
+    Ok(test)
+}
+
 pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -199,6 +270,87 @@ pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
     })
 }
 
+pub fn run_test_suite(args: &TestArgs) -> Result<()> {
+    let config_source = fs::read_to_string(&args.config).map_err(|error| {
+        AegisError::new(format!(
+            "failed to read config '{}': {error}",
+            args.config.display()
+        ))
+    })?;
+    let config = parse_config(&config_source)?;
+
+    if config.smoke.is_empty() {
+        return Err(AegisError::new(format!(
+            "config '{}' does not define any [[smoke]] checks",
+            args.config.display()
+        )));
+    }
+
+    println!("Aegis test started");
+    println!("  config: {}", args.config.display());
+
+    for (index, check) in config.smoke.iter().enumerate() {
+        let smoke = smoke_args_from_config(&config, check)?;
+        let label = check
+            .name
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("smoke {}", index + 1));
+        let report = run_smoke(&smoke).map_err(|error| {
+            AegisError::new(format!("check '{label}' failed for {}: {error}", smoke.url))
+        })?;
+
+        println!(
+            "  ok {label}: {} HTTP {} ({} bytes)",
+            report.url, report.status, report.body_bytes
+        );
+    }
+
+    println!("Aegis test passed: {} smoke check(s)", config.smoke.len());
+    Ok(())
+}
+
+pub fn parse_config(source: &str) -> Result<AegisConfig> {
+    toml::from_str::<AegisConfig>(source)
+        .map_err(|error| AegisError::new(format!("failed to parse aegis config: {error}")))
+}
+
+fn smoke_args_from_config(config: &AegisConfig, check: &SmokeCheckConfig) -> Result<SmokeArgs> {
+    let url = match (check.url.as_deref(), check.path.as_deref()) {
+        (Some(url), None) => url.to_string(),
+        (None, Some(path)) => join_url(
+            config
+                .base_url
+                .as_deref()
+                .ok_or_else(|| AegisError::new("smoke check with path requires base_url"))?,
+            path,
+        ),
+        (Some(_), Some(_)) => {
+            return Err(AegisError::new(
+                "smoke check must use either url or path, not both",
+            ));
+        }
+        (None, None) => return Err(AegisError::new("smoke check requires url or path")),
+    };
+
+    Ok(SmokeArgs {
+        url,
+        expect_status: check.status,
+        expect_text: check.expect.clone(),
+    })
+}
+
+fn join_url(base_url: &str, path: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    let path = path.trim_start_matches('/');
+
+    if path.is_empty() {
+        format!("{base}/")
+    } else {
+        format!("{base}/{path}")
+    }
+}
+
 fn print_help() {
     println!("Aegis {VERSION}");
     println!("Rust-first E2E and QA runner for Axonyx applications.");
@@ -206,17 +358,24 @@ fn print_help() {
     println!("Usage:");
     println!("  aegis doctor");
     println!("  aegis smoke --url http://127.0.0.1:3000 --expect Axonyx");
+    println!("  aegis test --config aegis.toml");
     println!("  aegis browser");
     println!();
     println!("Commands:");
     println!("  doctor   Print local runner readiness.");
     println!("  smoke    Run a fast HTTP smoke check against a local site.");
+    println!("  test     Run smoke checks from aegis.toml.");
     println!("  browser  Reserved placeholder for the future browser engine.");
 }
 
 fn print_smoke_help() {
     println!("Usage:");
     println!("  aegis smoke --url http://127.0.0.1:3000 --status 200 --expect Axonyx");
+}
+
+fn print_test_help() {
+    println!("Usage:");
+    println!("  aegis test --config aegis.toml");
 }
 
 fn print_doctor() {
@@ -274,5 +433,80 @@ mod tests {
 
         assert_eq!(args.url, "https://react.axonyx.dev/docs/getting-started");
         assert_eq!(args.expect_status, 200);
+    }
+
+    #[test]
+    fn parses_default_test_command() {
+        let command = parse_command(["test".to_string()]).unwrap();
+
+        assert_eq!(
+            command,
+            Command::Test(TestArgs {
+                config: PathBuf::from("aegis.toml")
+            })
+        );
+    }
+
+    #[test]
+    fn parses_test_config_option() {
+        let command = parse_command([
+            "test".to_string(),
+            "--config".to_string(),
+            "react.aegis.toml".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            command,
+            Command::Test(TestArgs {
+                config: PathBuf::from("react.aegis.toml")
+            })
+        );
+    }
+
+    #[test]
+    fn parses_config_smoke_checks() {
+        let config = parse_config(
+            r#"
+base_url = "https://react.axonyx.dev"
+
+[[smoke]]
+name = "home"
+path = "/"
+expect = "Axonyx"
+
+[[smoke]]
+name = "docs"
+path = "/docs/getting-started"
+expect = "Getting Started"
+status = 200
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.base_url.as_deref(), Some("https://react.axonyx.dev"));
+        assert_eq!(config.smoke.len(), 2);
+        assert_eq!(config.smoke[0].status, 200);
+        assert_eq!(config.smoke[1].expect.as_deref(), Some("Getting Started"));
+    }
+
+    #[test]
+    fn builds_smoke_args_from_base_url_and_path() {
+        let config = AegisConfig {
+            base_url: Some("https://react.axonyx.dev/".to_string()),
+            smoke: vec![],
+        };
+        let check = SmokeCheckConfig {
+            name: Some("docs".to_string()),
+            path: Some("/docs/getting-started".to_string()),
+            url: None,
+            expect: Some("Getting Started".to_string()),
+            status: 200,
+        };
+
+        let smoke = smoke_args_from_config(&config, &check).unwrap();
+
+        assert_eq!(smoke.url, "https://react.axonyx.dev/docs/getting-started");
+        assert_eq!(smoke.expect_text.as_deref(), Some("Getting Started"));
     }
 }
