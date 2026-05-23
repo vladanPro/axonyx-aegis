@@ -20,6 +20,8 @@ pub struct SmokeArgs {
     pub url: String,
     pub expect_status: u16,
     pub expect_text: Option<String>,
+    pub expect_all: Vec<String>,
+    pub expect_not: Vec<String>,
 }
 
 impl Default for SmokeArgs {
@@ -28,6 +30,8 @@ impl Default for SmokeArgs {
             url: "http://127.0.0.1:3000/".to_string(),
             expect_status: 200,
             expect_text: None,
+            expect_all: Vec::new(),
+            expect_not: Vec::new(),
         }
     }
 }
@@ -66,6 +70,10 @@ pub struct SmokeCheckConfig {
     pub path: Option<String>,
     pub url: Option<String>,
     pub expect: Option<String>,
+    #[serde(default)]
+    pub expect_all: Vec<String>,
+    #[serde(default)]
+    pub expect_not: Vec<String>,
     #[serde(default = "default_status")]
     pub status: u16,
 }
@@ -157,6 +165,19 @@ impl FastPage {
         self
     }
 
+    pub fn expect_all(&mut self, expected: &[&str]) -> &mut Self {
+        for text in expected {
+            self.expect_text(text);
+        }
+        self
+    }
+
+    pub fn expect_not(&mut self, unexpected: &str) -> &mut Self {
+        self.try_expect_not(unexpected)
+            .unwrap_or_else(|error| panic!("Aegis fast '{}' failed: {error}", self.test_name));
+        self
+    }
+
     pub fn try_goto(&mut self, url: &str) -> Result<()> {
         let response = self
             .client
@@ -220,6 +241,16 @@ impl FastPage {
 
         Err(AegisError::new(format!(
             "expected HTTP status {expected}, got {actual}"
+        )))
+    }
+
+    pub fn try_expect_not(&self, unexpected: &str) -> Result<()> {
+        if !self.current_body.contains(unexpected) {
+            return Ok(());
+        }
+
+        Err(AegisError::new(format!(
+            "expected current response body not to contain '{unexpected}'"
         )))
     }
 }
@@ -327,6 +358,14 @@ fn parse_smoke_args(args: Vec<String>) -> Result<SmokeArgs> {
                         .ok_or_else(|| AegisError::new("--expect requires a value"))?,
                 );
             }
+            "--expect-not" => {
+                index += 1;
+                smoke.expect_not.push(
+                    args.get(index)
+                        .cloned()
+                        .ok_or_else(|| AegisError::new("--expect-not requires a value"))?,
+                );
+            }
             "-h" | "--help" => {
                 print_smoke_help();
                 return Ok(smoke);
@@ -402,6 +441,22 @@ pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
         if !body.contains(expected) {
             return Err(AegisError::new(format!(
                 "expected response body to contain '{expected}'"
+            )));
+        }
+    }
+
+    for expected in &args.expect_all {
+        if !body.contains(expected) {
+            return Err(AegisError::new(format!(
+                "expected response body to contain '{expected}'"
+            )));
+        }
+    }
+
+    for unexpected in &args.expect_not {
+        if body.contains(unexpected) {
+            return Err(AegisError::new(format!(
+                "expected response body not to contain '{unexpected}'"
             )));
         }
     }
@@ -484,6 +539,8 @@ fn smoke_args_from_config(config: &AegisConfig, check: &SmokeCheckConfig) -> Res
         url,
         expect_status: check.status,
         expect_text: check.expect.clone(),
+        expect_all: check.expect_all.clone(),
+        expect_not: check.expect_not.clone(),
     })
 }
 
@@ -546,7 +603,9 @@ fn print_help() {
 
 fn print_smoke_help() {
     println!("Usage:");
-    println!("  aegis smoke --url http://127.0.0.1:3000 --status 200 --expect Axonyx");
+    println!(
+        "  aegis smoke --url http://127.0.0.1:3000 --status 200 --expect Axonyx --expect-not Error"
+    );
 }
 
 fn print_fast_help() {
@@ -590,6 +649,8 @@ mod tests {
                 url: "http://127.0.0.1:4173/docs".to_string(),
                 expect_status: 200,
                 expect_text: Some("Axonyx".to_string()),
+                expect_all: Vec::new(),
+                expect_not: Vec::new(),
             })
         );
     }
@@ -679,6 +740,25 @@ status = 200
     }
 
     #[test]
+    fn parses_config_positive_and_negative_expectations() {
+        let config = parse_config(
+            r#"
+base_url = "https://react.axonyx.dev"
+
+[[smoke]]
+name = "home"
+path = "/"
+expect_all = ["Axonyx", "React"]
+expect_not = ["Internal Server Error"]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.smoke[0].expect_all, ["Axonyx", "React"]);
+        assert_eq!(config.smoke[0].expect_not, ["Internal Server Error"]);
+    }
+
+    #[test]
     fn builds_smoke_args_from_base_url_and_path() {
         let config = AegisConfig {
             base_url: Some("https://react.axonyx.dev/".to_string()),
@@ -689,6 +769,8 @@ status = 200
             path: Some("/docs/getting-started".to_string()),
             url: None,
             expect: Some("Getting Started".to_string()),
+            expect_all: vec!["Docs".to_string()],
+            expect_not: vec!["Internal Server Error".to_string()],
             status: 200,
         };
 
@@ -696,6 +778,8 @@ status = 200
 
         assert_eq!(smoke.url, "https://react.axonyx.dev/docs/getting-started");
         assert_eq!(smoke.expect_text.as_deref(), Some("Getting Started"));
+        assert_eq!(smoke.expect_all, ["Docs"]);
+        assert_eq!(smoke.expect_not, ["Internal Server Error"]);
     }
 
     #[test]
