@@ -77,6 +77,59 @@ Use future `browser` checks when the test needs a real user session:
 - JavaScript validation
 - screenshots and traces
 
+## Rust Test Files
+
+Aegis can also be used as a Rust test DSL. A project can keep the same mental
+model as Playwright, but split fast response tests from real browser tests:
+
+```text
+tests/
+  fast.rs
+  fast/
+    opens_docs.rs
+  browser.rs
+  browser/
+    login.rs
+```
+
+`tests/fast.rs`:
+
+```rust
+#[path = "fast/opens_docs.rs"]
+mod opens_docs;
+```
+
+`tests/fast/opens_docs.rs`:
+
+```rust
+#[test]
+fn opens_docs() {
+    aegis::fast("opens docs", |page| {
+        page.goto("https://react.axonyx.dev");
+        page.click("a[href='/docs/getting-started']");
+        page.expect_text("Getting Started");
+    });
+}
+```
+
+Fast tests do not launch a browser. `click` currently supports normal anchor
+navigation such as `a[href='/docs/getting-started']` and follows that link with a
+new HTTP request.
+
+Future browser tests keep the same shape, but will run through a headless
+browser engine:
+
+```rust
+#[test]
+fn login() {
+    aegis::browser("login", |page| {
+        page.goto("https://react.axonyx.dev/login");
+        page.click("a[href='/profile/settings']");
+        page.expect_text("Change theme");
+    });
+}
+```
+
 ## Intended Axonyx Integration
 
 Framework users should eventually run:

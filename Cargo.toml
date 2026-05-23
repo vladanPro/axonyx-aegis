@@ -1,6 +1,6 @@
 [package]
 name = "axonyx-aegis"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Rust-first E2E and QA runner for Axonyx applications."
 license = "MIT"
@@ -9,6 +9,10 @@ readme = "README.md"
 keywords = ["axonyx", "e2e", "testing", "qa", "cli"]
 categories = ["command-line-utilities", "development-tools::testing"]
 exclude = [".github/"]
+
+[lib]
+name = "aegis"
+path = "src/lib.rs"
 
 [[bin]]
 name = "aegis"
