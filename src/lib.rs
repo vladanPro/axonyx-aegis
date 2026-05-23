@@ -11,7 +11,7 @@ pub enum Command {
     Help,
     Doctor,
     Smoke(SmokeArgs),
-    Test(TestArgs),
+    Fast(FastArgs),
     Browser,
 }
 
@@ -41,11 +41,11 @@ pub struct SmokeReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TestArgs {
+pub struct FastArgs {
     pub config: PathBuf,
 }
 
-impl Default for TestArgs {
+impl Default for FastArgs {
     fn default() -> Self {
         Self {
             config: PathBuf::from("aegis.toml"),
@@ -122,7 +122,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
             }
             Ok(())
         }
-        Command::Test(args) => run_test_suite(&args),
+        Command::Fast(args) => run_fast_suite(&args),
         Command::Browser => {
             println!("Aegis browser engine is reserved for the next phase.");
             println!("Planned shape:");
@@ -145,7 +145,8 @@ pub fn parse_command(args: impl IntoIterator<Item = String>) -> Result<Command> 
     match command.as_str() {
         "doctor" => Ok(Command::Doctor),
         "smoke" => parse_smoke_args(args).map(Command::Smoke),
-        "test" => parse_test_args(args).map(Command::Test),
+        "fast" => parse_fast_args(args).map(Command::Fast),
+        "test" => parse_fast_args(args).map(Command::Fast),
         "browser" => Ok(Command::Browser),
         other => Err(AegisError::new(format!(
             "unknown command '{other}'. Run `aegis --help`."
@@ -200,27 +201,27 @@ fn parse_smoke_args(args: Vec<String>) -> Result<SmokeArgs> {
     Ok(smoke)
 }
 
-fn parse_test_args(args: Vec<String>) -> Result<TestArgs> {
-    let mut test = TestArgs::default();
+fn parse_fast_args(args: Vec<String>) -> Result<FastArgs> {
+    let mut fast = FastArgs::default();
     let mut index = 0;
 
     while index < args.len() {
         match args[index].as_str() {
             "--config" | "-c" => {
                 index += 1;
-                test.config = PathBuf::from(
+                fast.config = PathBuf::from(
                     args.get(index)
                         .cloned()
                         .ok_or_else(|| AegisError::new("--config requires a value"))?,
                 );
             }
             "-h" | "--help" => {
-                print_test_help();
-                return Ok(test);
+                print_fast_help();
+                return Ok(fast);
             }
             other => {
                 return Err(AegisError::new(format!(
-                    "unknown test option '{other}'. Run `aegis test --help`."
+                    "unknown fast option '{other}'. Run `aegis fast --help`."
                 )));
             }
         }
@@ -228,7 +229,7 @@ fn parse_test_args(args: Vec<String>) -> Result<TestArgs> {
         index += 1;
     }
 
-    Ok(test)
+    Ok(fast)
 }
 
 pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
@@ -270,7 +271,7 @@ pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
     })
 }
 
-pub fn run_test_suite(args: &TestArgs) -> Result<()> {
+pub fn run_fast_suite(args: &FastArgs) -> Result<()> {
     let config_source = fs::read_to_string(&args.config).map_err(|error| {
         AegisError::new(format!(
             "failed to read config '{}': {error}",
@@ -286,7 +287,7 @@ pub fn run_test_suite(args: &TestArgs) -> Result<()> {
         )));
     }
 
-    println!("Aegis test started");
+    println!("Aegis fast checks started");
     println!("  config: {}", args.config.display());
 
     for (index, check) in config.smoke.iter().enumerate() {
@@ -306,7 +307,10 @@ pub fn run_test_suite(args: &TestArgs) -> Result<()> {
         );
     }
 
-    println!("Aegis test passed: {} smoke check(s)", config.smoke.len());
+    println!(
+        "Aegis fast checks passed: {} smoke check(s)",
+        config.smoke.len()
+    );
     Ok(())
 }
 
@@ -358,13 +362,14 @@ fn print_help() {
     println!("Usage:");
     println!("  aegis doctor");
     println!("  aegis smoke --url http://127.0.0.1:3000 --expect Axonyx");
-    println!("  aegis test --config aegis.toml");
+    println!("  aegis fast --config aegis.toml");
     println!("  aegis browser");
     println!();
     println!("Commands:");
     println!("  doctor   Print local runner readiness.");
     println!("  smoke    Run a fast HTTP smoke check against a local site.");
-    println!("  test     Run smoke checks from aegis.toml.");
+    println!("  fast     Run fast HTTP/response checks from aegis.toml.");
+    println!("  test     Alias for fast, kept for convenience.");
     println!("  browser  Reserved placeholder for the future browser engine.");
 }
 
@@ -373,9 +378,9 @@ fn print_smoke_help() {
     println!("  aegis smoke --url http://127.0.0.1:3000 --status 200 --expect Axonyx");
 }
 
-fn print_test_help() {
+fn print_fast_help() {
     println!("Usage:");
-    println!("  aegis test --config aegis.toml");
+    println!("  aegis fast --config aegis.toml");
 }
 
 fn print_doctor() {
@@ -436,21 +441,33 @@ mod tests {
     }
 
     #[test]
-    fn parses_default_test_command() {
-        let command = parse_command(["test".to_string()]).unwrap();
+    fn parses_default_fast_command() {
+        let command = parse_command(["fast".to_string()]).unwrap();
 
         assert_eq!(
             command,
-            Command::Test(TestArgs {
+            Command::Fast(FastArgs {
                 config: PathBuf::from("aegis.toml")
             })
         );
     }
 
     #[test]
-    fn parses_test_config_option() {
+    fn parses_test_alias_for_fast_command() {
+        let command = parse_command(["test".to_string()]).unwrap();
+
+        assert_eq!(
+            command,
+            Command::Fast(FastArgs {
+                config: PathBuf::from("aegis.toml")
+            })
+        );
+    }
+
+    #[test]
+    fn parses_fast_config_option() {
         let command = parse_command([
-            "test".to_string(),
+            "fast".to_string(),
             "--config".to_string(),
             "react.aegis.toml".to_string(),
         ])
@@ -458,7 +475,7 @@ mod tests {
 
         assert_eq!(
             command,
-            Command::Test(TestArgs {
+            Command::Fast(FastArgs {
                 config: PathBuf::from("react.aegis.toml")
             })
         );

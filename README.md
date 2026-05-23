@@ -22,12 +22,14 @@ define a small, reliable Rust core that can grow into:
 ```bash
 cargo run -- doctor
 cargo run -- smoke --url http://127.0.0.1:3000 --expect Axonyx
-cargo run -- test --config aegis.toml
+cargo run -- fast --config aegis.toml
 cargo run -- browser
 ```
 
-`smoke` supports both local `http://` URLs and deployed `https://` URLs. A real
-browser engine is reserved for the next phase.
+`fast` runs HTTP/response checks without launching a browser. It is designed for
+quick route, text, status, and deployment checks. A real browser engine is
+reserved for login flows, JavaScript interactions, forms, redirects, screenshots,
+and user journeys.
 
 ## Config Smoke Suites
 
@@ -50,8 +52,30 @@ expect = "Getting Started"
 Then run:
 
 ```bash
-aegis test --config aegis.toml
+aegis fast --config aegis.toml
 ```
+
+`aegis test --config aegis.toml` currently works as an alias for `fast`, but
+`fast` is the clearer command when you specifically want no-browser checks.
+
+## Fast vs Browser
+
+Use `fast` when you want quick response checks:
+
+- status code
+- route exists
+- HTML contains text
+- deployed site is alive
+- generated docs/components are reachable
+
+Use future `browser` checks when the test needs a real user session:
+
+- login form
+- cookies/session redirects
+- client-side navigation
+- dropdowns/modals/theme switchers
+- JavaScript validation
+- screenshots and traces
 
 ## Intended Axonyx Integration
 
