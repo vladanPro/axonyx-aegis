@@ -70,6 +70,7 @@ goto = "/"
 expect_text = "Axonyx"
 expect_all = ["Foundry", "React"]
 expect_links = ["/docs/getting-started", "/components"]
+check_links = true
 expect_not = ["Internal Server Error"]
 
 [[fast]]
@@ -89,6 +90,11 @@ aegis fast --config aegis.toml
 
 `aegis test --config aegis.toml` currently works as an alias for `fast`, but
 `fast` is the clearer command when you specifically want no-browser checks.
+
+Set `check_links = true` on a `[[fast]]` check when you want Aegis to request
+same-origin links found on the current page and fail on broken HTTP responses.
+External URLs, anchors, `mailto:`, `tel:`, `javascript:`, and `data:` links are
+skipped.
 
 Older `[[smoke]]` entries still work as a compatibility alias, but `[[fast]]`
 is the recommended frontend-friendly syntax.
@@ -142,6 +148,7 @@ fn opens_docs() {
     aegis::fast("opens docs", |page| {
         page.goto("https://react.axonyx.dev");
         page.expect_link("/docs/getting-started");
+        page.check_links();
         page.click("a[href='/docs/getting-started']");
         page.expect_all(&["Axonyx", "Docs"]);
         page.expect_text("Getting Started");

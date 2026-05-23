@@ -12,6 +12,7 @@ name = "home"
 goto = "/"
 expect_text = "Example"
 expect_links = ["/docs"]
+check_links = true
 expect_not = ["Internal Server Error"]
 
 [[fast]]
@@ -144,6 +145,8 @@ pub struct FastCheckConfig {
     #[serde(default)]
     pub expect_links: Vec<String>,
     #[serde(default)]
+    pub check_links: bool,
+    #[serde(default)]
     pub expect_all: Vec<String>,
     #[serde(default)]
     pub expect_not: Vec<String>,
@@ -258,6 +261,12 @@ impl FastPage {
         self
     }
 
+    pub fn check_links(&mut self) -> &mut Self {
+        self.try_check_links()
+            .unwrap_or_else(|error| panic!("Aegis fast '{}' failed: {error}", self.test_name));
+        self
+    }
+
     pub fn expect_not(&mut self, unexpected: &str) -> &mut Self {
         self.try_expect_not(unexpected)
             .unwrap_or_else(|error| panic!("Aegis fast '{}' failed: {error}", self.test_name));
@@ -333,6 +342,51 @@ impl FastPage {
         Err(AegisError::new(format!(
             "expected current response body to contain link href '{href}'"
         )))
+    }
+
+    pub fn try_check_links(&self) -> Result<()> {
+        let current_url = self
+            .current_url
+            .as_deref()
+            .ok_or_else(|| AegisError::new("call goto before check_links"))?;
+        let current_origin = origin_from_url(current_url)
+            .ok_or_else(|| AegisError::new("check_links requires an absolute current URL"))?;
+        let mut checked = Vec::new();
+
+        for href in extract_link_hrefs(&self.current_body) {
+            if should_skip_link(&href) {
+                continue;
+            }
+
+            let url = resolve_href(current_url, &href);
+            if origin_from_url(&url).as_deref() != Some(current_origin.as_str()) {
+                continue;
+            }
+
+            if checked.contains(&url) {
+                continue;
+            }
+
+            let response = self
+                .client
+                .get(&url)
+                .header(reqwest::header::ACCEPT, "text/html,*/*")
+                .send()
+                .map_err(|error| {
+                    AegisError::new(format!("failed to check link '{href}' -> {url}: {error}"))
+                })?;
+            let status = response.status().as_u16();
+
+            if status >= 400 {
+                return Err(AegisError::new(format!(
+                    "link '{href}' resolved to {url} returned HTTP {status}"
+                )));
+            }
+
+            checked.push(url);
+        }
+
+        Ok(())
     }
 
     pub fn try_expect_not(&self, unexpected: &str) -> Result<()> {
@@ -693,6 +747,7 @@ fn collect_fast_checks(config: &AegisConfig) -> Vec<FastCheckConfig> {
             expect_text: smoke.expect.clone(),
             expect_link: None,
             expect_links: Vec::new(),
+            check_links: false,
             expect_all: smoke.expect_all.clone(),
             expect_not: smoke.expect_not.clone(),
             status: smoke.status,
@@ -743,6 +798,10 @@ fn run_fast_check(config: &AegisConfig, check: &FastCheckConfig) -> Result<Smoke
         page.try_expect_not(unexpected)?;
     }
 
+    if check.check_links {
+        page.try_check_links()?;
+    }
+
     Ok(SmokeReport {
         url: page.current_url.clone().unwrap_or(first_url),
         status: page.current_status.unwrap_or(check.status),
@@ -791,6 +850,47 @@ fn body_has_link_href(body: &str, href: &str) -> bool {
     let quoted_href_double = format!("href=\"{href}\"");
     let quoted_href_single = format!("href='{href}'");
     body.contains(&quoted_href_double) || body.contains(&quoted_href_single)
+}
+
+fn extract_link_hrefs(body: &str) -> Vec<String> {
+    let mut hrefs = Vec::new();
+    let mut rest = body;
+
+    while let Some(index) = rest.find("href=") {
+        rest = &rest[index + "href=".len()..];
+        let Some(quote) = rest.chars().next() else {
+            break;
+        };
+
+        if quote != '\'' && quote != '"' {
+            continue;
+        }
+
+        rest = &rest[quote.len_utf8()..];
+        let Some(end) = rest.find(quote) else {
+            break;
+        };
+        hrefs.push(rest[..end].to_string());
+        rest = &rest[end + quote.len_utf8()..];
+    }
+
+    hrefs
+}
+
+fn should_skip_link(href: &str) -> bool {
+    let trimmed = href.trim();
+    trimmed.is_empty()
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("mailto:")
+        || trimmed.starts_with("tel:")
+        || trimmed.starts_with("javascript:")
+        || trimmed.starts_with("data:")
+}
+
+fn origin_from_url(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split('/').next().unwrap_or(rest);
+    Some(format!("{scheme}://{authority}"))
 }
 
 fn resolve_href(current_url: &str, href: &str) -> String {
@@ -1014,6 +1114,7 @@ expect_text = "Getting Started"
 expect_all = ["Axonyx", "Docs"]
 expect_link = "/components"
 expect_links = ["/api/button", "/react"]
+check_links = true
 expect_not = ["Internal Server Error"]
 "#,
         )
@@ -1030,6 +1131,7 @@ expect_not = ["Internal Server Error"]
         );
         assert_eq!(config.fast[0].expect_link.as_deref(), Some("/components"));
         assert_eq!(config.fast[0].expect_links, ["/api/button", "/react"]);
+        assert!(config.fast[0].check_links);
     }
 
     #[test]
@@ -1050,6 +1152,36 @@ expect_not = ["Internal Server Error"]
         assert!(body_has_link_href(html, "/docs"));
         assert!(body_has_link_href(html, "/components"));
         assert!(!body_has_link_href(html, "/missing"));
+    }
+
+    #[test]
+    fn extracts_link_hrefs_from_html() {
+        let html = r##"
+<a href="/docs">Docs</a>
+<a class="button" href='/components'>Components</a>
+<a href="#top">Top</a>
+"##;
+        assert_eq!(extract_link_hrefs(html), ["/docs", "/components", "#top"]);
+    }
+
+    #[test]
+    fn skips_non_http_navigation_links() {
+        assert!(should_skip_link(""));
+        assert!(should_skip_link("#top"));
+        assert!(should_skip_link("mailto:hello@example.com"));
+        assert!(should_skip_link("tel:+381"));
+        assert!(should_skip_link("javascript:void(0)"));
+        assert!(should_skip_link("data:text/plain,hello"));
+        assert!(!should_skip_link("/docs"));
+    }
+
+    #[test]
+    fn extracts_origin_from_absolute_url() {
+        assert_eq!(
+            origin_from_url("https://react.axonyx.dev/docs/getting-started").as_deref(),
+            Some("https://react.axonyx.dev")
+        );
+        assert_eq!(origin_from_url("/docs"), None);
     }
 
     #[test]
