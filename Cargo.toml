@@ -1,6 +1,6 @@
 [package]
 name = "axonyx-aegis"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 description = "Rust-first E2E and QA runner for Axonyx applications."
 license = "MIT"
