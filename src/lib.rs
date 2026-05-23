@@ -11,6 +11,7 @@ const INIT_AEGIS_TOML: &str = r#"base_url = "https://example.com"
 name = "home"
 goto = "/"
 expect_text = "Example"
+expect_links = ["/docs"]
 expect_not = ["Internal Server Error"]
 
 [[fast]]
@@ -139,6 +140,9 @@ pub struct FastCheckConfig {
     pub url: Option<String>,
     pub click: Option<String>,
     pub expect_text: Option<String>,
+    pub expect_link: Option<String>,
+    #[serde(default)]
+    pub expect_links: Vec<String>,
     #[serde(default)]
     pub expect_all: Vec<String>,
     #[serde(default)]
@@ -241,6 +245,19 @@ impl FastPage {
         self
     }
 
+    pub fn expect_link(&mut self, href: &str) -> &mut Self {
+        self.try_expect_link(href)
+            .unwrap_or_else(|error| panic!("Aegis fast '{}' failed: {error}", self.test_name));
+        self
+    }
+
+    pub fn expect_links(&mut self, hrefs: &[&str]) -> &mut Self {
+        for href in hrefs {
+            self.expect_link(href);
+        }
+        self
+    }
+
     pub fn expect_not(&mut self, unexpected: &str) -> &mut Self {
         self.try_expect_not(unexpected)
             .unwrap_or_else(|error| panic!("Aegis fast '{}' failed: {error}", self.test_name));
@@ -271,12 +288,7 @@ impl FastPage {
                 "fast click currently supports selectors shaped like a[href='/path']; got '{selector}'"
             ))
         })?;
-        let quoted_href_double = format!("href=\"{href}\"");
-        let quoted_href_single = format!("href='{href}'");
-
-        if !self.current_body.contains(&quoted_href_double)
-            && !self.current_body.contains(&quoted_href_single)
-        {
+        if !body_has_link_href(&self.current_body, &href) {
             return Err(AegisError::new(format!(
                 "current page does not contain link href '{href}'"
             )));
@@ -310,6 +322,16 @@ impl FastPage {
 
         Err(AegisError::new(format!(
             "expected HTTP status {expected}, got {actual}"
+        )))
+    }
+
+    pub fn try_expect_link(&self, href: &str) -> Result<()> {
+        if body_has_link_href(&self.current_body, href) {
+            return Ok(());
+        }
+
+        Err(AegisError::new(format!(
+            "expected current response body to contain link href '{href}'"
         )))
     }
 
@@ -669,6 +691,8 @@ fn collect_fast_checks(config: &AegisConfig) -> Vec<FastCheckConfig> {
             url: smoke.url.clone(),
             click: None,
             expect_text: smoke.expect.clone(),
+            expect_link: None,
+            expect_links: Vec::new(),
             expect_all: smoke.expect_all.clone(),
             expect_not: smoke.expect_not.clone(),
             status: smoke.status,
@@ -701,6 +725,14 @@ fn run_fast_check(config: &AegisConfig, check: &FastCheckConfig) -> Result<Smoke
 
     if let Some(expected) = check.expect_text.as_deref() {
         page.try_expect_text(expected)?;
+    }
+
+    if let Some(href) = check.expect_link.as_deref() {
+        page.try_expect_link(href)?;
+    }
+
+    for href in &check.expect_links {
+        page.try_expect_link(href)?;
     }
 
     for expected in &check.expect_all {
@@ -753,6 +785,12 @@ fn href_from_selector(selector: &str) -> Option<String> {
     }
     let value = rest.strip_prefix(quote)?.strip_suffix(quote)?;
     Some(value.to_string())
+}
+
+fn body_has_link_href(body: &str, href: &str) -> bool {
+    let quoted_href_double = format!("href=\"{href}\"");
+    let quoted_href_single = format!("href='{href}'");
+    body.contains(&quoted_href_double) || body.contains(&quoted_href_single)
 }
 
 fn resolve_href(current_url: &str, href: &str) -> String {
@@ -974,6 +1012,8 @@ goto = "/"
 click = "a[href='/docs/getting-started']"
 expect_text = "Getting Started"
 expect_all = ["Axonyx", "Docs"]
+expect_link = "/components"
+expect_links = ["/api/button", "/react"]
 expect_not = ["Internal Server Error"]
 "#,
         )
@@ -988,6 +1028,8 @@ expect_not = ["Internal Server Error"]
             config.fast[0].expect_text.as_deref(),
             Some("Getting Started")
         );
+        assert_eq!(config.fast[0].expect_link.as_deref(), Some("/components"));
+        assert_eq!(config.fast[0].expect_links, ["/api/button", "/react"]);
     }
 
     #[test]
@@ -1000,6 +1042,14 @@ expect_not = ["Internal Server Error"]
             href_from_selector("a[href=\"/components\"]").as_deref(),
             Some("/components")
         );
+    }
+
+    #[test]
+    fn detects_link_href_in_html() {
+        let html = r#"<a href="/docs">Docs</a><a href='/components'>Components</a>"#;
+        assert!(body_has_link_href(html, "/docs"));
+        assert!(body_has_link_href(html, "/components"));
+        assert!(!body_has_link_href(html, "/missing"));
     }
 
     #[test]

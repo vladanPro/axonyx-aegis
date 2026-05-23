@@ -69,6 +69,7 @@ name = "home"
 goto = "/"
 expect_text = "Axonyx"
 expect_all = ["Foundry", "React"]
+expect_links = ["/docs/getting-started", "/components"]
 expect_not = ["Internal Server Error"]
 
 [[fast]]
@@ -140,6 +141,7 @@ mod opens_docs;
 fn opens_docs() {
     aegis::fast("opens docs", |page| {
         page.goto("https://react.axonyx.dev");
+        page.expect_link("/docs/getting-started");
         page.click("a[href='/docs/getting-started']");
         page.expect_all(&["Axonyx", "Docs"]);
         page.expect_text("Getting Started");
