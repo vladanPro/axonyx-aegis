@@ -21,6 +21,7 @@ define a small, reliable Rust core that can grow into:
 
 ```bash
 cargo run -- doctor
+cargo run -- init
 cargo run -- smoke --url http://127.0.0.1:3000 --expect Axonyx
 cargo run -- fast --config aegis.toml
 cargo run -- browser
@@ -30,6 +31,31 @@ cargo run -- browser
 quick route, text, status, and deployment checks. A real browser engine is
 reserved for login flows, JavaScript interactions, forms, redirects, screenshots,
 and user journeys.
+
+## Init
+
+For frontend projects, start with:
+
+```bash
+cargo install axonyx-aegis
+aegis init
+```
+
+This creates:
+
+```text
+aegis.toml
+Cargo.toml
+src/lib.rs
+tests/
+  fast.rs
+  fast/navigation.rs
+  browser.rs
+  browser/drawer.rs
+```
+
+Use `aegis init --force` if you intentionally want to overwrite existing Aegis
+example files.
 
 ## Config Fast Suites
 

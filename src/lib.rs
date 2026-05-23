@@ -5,11 +5,58 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const INIT_AEGIS_TOML: &str = r#"base_url = "https://example.com"
+
+[[fast]]
+name = "home"
+goto = "/"
+expect_text = "Example"
+expect_not = ["Internal Server Error"]
+
+[[fast]]
+name = "docs"
+goto = "/"
+click = "a[href='/docs']"
+expect_text = "Docs"
+"#;
+const INIT_CARGO_TOML: &str = r#"[package]
+name = "aegis-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+axonyx-aegis = "0.1.6"
+"#;
+const INIT_SRC_LIB_RS: &str = "//! Test-only crate for Aegis examples.\n";
+const INIT_TESTS_FAST_RS: &str = "#[path = \"fast/navigation.rs\"]\nmod navigation;\n";
+const INIT_TESTS_FAST_NAVIGATION_RS: &str = r#"#[test]
+fn opens_docs() {
+    aegis::fast("opens docs", |page| {
+        page.goto("https://example.com");
+        page.expect_status(200);
+        page.expect_text("Example");
+        page.expect_not("Internal Server Error");
+    });
+}
+"#;
+const INIT_TESTS_BROWSER_RS: &str = "#[path = \"browser/drawer.rs\"]\nmod drawer;\n";
+const INIT_TESTS_BROWSER_DRAWER_RS: &str = r#"#[test]
+#[ignore = "Aegis browser engine is reserved for a future release"]
+fn opens_drawer() {
+    aegis::browser("opens drawer", |page| {
+        page.goto("https://example.com/components/drawer");
+        page.click("[data-ax-drawer-open]");
+        page.expect_text("Drawer");
+    });
+}
+"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Help,
     Doctor,
+    Init(InitArgs),
     Smoke(SmokeArgs),
     Fast(FastArgs),
     Browser,
@@ -47,6 +94,11 @@ pub struct SmokeReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastArgs {
     pub config: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitArgs {
+    pub force: bool,
 }
 
 impl Default for FastArgs {
@@ -302,6 +354,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
             print_doctor();
             Ok(())
         }
+        Command::Init(args) => init_command(&args),
         Command::Smoke(args) => {
             let report = run_smoke(&args)?;
             println!("Aegis smoke passed");
@@ -335,6 +388,7 @@ pub fn parse_command(args: impl IntoIterator<Item = String>) -> Result<Command> 
     let command = args.remove(0);
     match command.as_str() {
         "doctor" => Ok(Command::Doctor),
+        "init" => parse_init_args(args).map(Command::Init),
         "smoke" => parse_smoke_args(args).map(Command::Smoke),
         "fast" => parse_fast_args(args).map(Command::Fast),
         "test" => parse_fast_args(args).map(Command::Fast),
@@ -343,6 +397,30 @@ pub fn parse_command(args: impl IntoIterator<Item = String>) -> Result<Command> 
             "unknown command '{other}'. Run `aegis --help`."
         ))),
     }
+}
+
+fn parse_init_args(args: Vec<String>) -> Result<InitArgs> {
+    let mut init = InitArgs { force: false };
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--force" | "-f" => init.force = true,
+            "-h" | "--help" => {
+                print_init_help();
+                return Ok(init);
+            }
+            other => {
+                return Err(AegisError::new(format!(
+                    "unknown init option '{other}'. Run `aegis init --help`."
+                )));
+            }
+        }
+
+        index += 1;
+    }
+
+    Ok(init)
 }
 
 fn parse_smoke_args(args: Vec<String>) -> Result<SmokeArgs> {
@@ -429,6 +507,58 @@ fn parse_fast_args(args: Vec<String>) -> Result<FastArgs> {
     }
 
     Ok(fast)
+}
+
+fn init_command(args: &InitArgs) -> Result<()> {
+    write_init_file(PathBuf::from("aegis.toml"), INIT_AEGIS_TOML, args.force)?;
+    write_init_file(PathBuf::from("Cargo.toml"), INIT_CARGO_TOML, args.force)?;
+    write_init_file(PathBuf::from("src/lib.rs"), INIT_SRC_LIB_RS, args.force)?;
+    write_init_file(
+        PathBuf::from("tests/fast.rs"),
+        INIT_TESTS_FAST_RS,
+        args.force,
+    )?;
+    write_init_file(
+        PathBuf::from("tests/fast/navigation.rs"),
+        INIT_TESTS_FAST_NAVIGATION_RS,
+        args.force,
+    )?;
+    write_init_file(
+        PathBuf::from("tests/browser.rs"),
+        INIT_TESTS_BROWSER_RS,
+        args.force,
+    )?;
+    write_init_file(
+        PathBuf::from("tests/browser/drawer.rs"),
+        INIT_TESTS_BROWSER_DRAWER_RS,
+        args.force,
+    )?;
+
+    println!("Aegis project files created.");
+    println!("Next:");
+    println!("  aegis fast --config aegis.toml");
+    println!("  cargo test --test fast");
+    Ok(())
+}
+
+fn write_init_file(path: PathBuf, contents: &str, force: bool) -> Result<()> {
+    if path.exists() && !force {
+        return Err(AegisError::new(format!(
+            "{} already exists; rerun with --force to overwrite",
+            path.display()
+        )));
+    }
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|error| {
+                AegisError::new(format!("failed to create '{}': {error}", parent.display()))
+            })?;
+        }
+    }
+
+    fs::write(&path, contents)
+        .map_err(|error| AegisError::new(format!("failed to write '{}': {error}", path.display())))
 }
 
 pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
@@ -648,16 +778,24 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  aegis doctor");
+    println!("  aegis init");
     println!("  aegis smoke --url http://127.0.0.1:3000 --expect Axonyx");
     println!("  aegis fast --config aegis.toml");
     println!("  aegis browser");
     println!();
     println!("Commands:");
     println!("  doctor   Print local runner readiness.");
+    println!("  init     Create aegis.toml and tests/ examples.");
     println!("  smoke    Run a fast HTTP smoke check against a local site.");
     println!("  fast     Run fast HTTP/response checks from aegis.toml.");
     println!("  test     Alias for fast, kept for convenience.");
     println!("  browser  Reserved placeholder for the future browser engine.");
+}
+
+fn print_init_help() {
+    println!("Usage:");
+    println!("  aegis init");
+    println!("  aegis init --force");
 }
 
 fn print_smoke_help() {
@@ -741,6 +879,13 @@ mod tests {
                 config: PathBuf::from("aegis.toml")
             })
         );
+    }
+
+    #[test]
+    fn parses_init_force_command() {
+        let command = parse_command(["init".to_string(), "--force".to_string()]).unwrap();
+
+        assert_eq!(command, Command::Init(InitArgs { force: true }));
     }
 
     #[test]
