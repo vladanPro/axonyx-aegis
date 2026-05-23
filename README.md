@@ -31,22 +31,25 @@ quick route, text, status, and deployment checks. A real browser engine is
 reserved for login flows, JavaScript interactions, forms, redirects, screenshots,
 and user journeys.
 
-## Config Smoke Suites
+## Config Fast Suites
 
 For React, Next, or Axonyx sites, create `aegis.toml`:
 
 ```toml
 base_url = "https://react.axonyx.dev"
 
-[[smoke]]
+[[fast]]
 name = "home"
-path = "/"
-expect = "Axonyx"
+goto = "/"
+expect_text = "Axonyx"
+expect_all = ["Foundry", "React"]
+expect_not = ["Internal Server Error"]
 
-[[smoke]]
+[[fast]]
 name = "docs"
-path = "/docs/getting-started"
-expect = "Getting Started"
+goto = "/"
+click = "a[href='/docs/getting-started']"
+expect_text = "Getting Started"
 expect_all = ["Axonyx", "Docs"]
 expect_not = ["Internal Server Error"]
 ```
@@ -59,6 +62,9 @@ aegis fast --config aegis.toml
 
 `aegis test --config aegis.toml` currently works as an alias for `fast`, but
 `fast` is the clearer command when you specifically want no-browser checks.
+
+Older `[[smoke]]` entries still work as a compatibility alias, but `[[fast]]`
+is the recommended frontend-friendly syntax.
 
 ## Fast vs Browser
 

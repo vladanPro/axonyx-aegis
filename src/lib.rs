@@ -61,6 +61,8 @@ impl Default for FastArgs {
 pub struct AegisConfig {
     pub base_url: Option<String>,
     #[serde(default)]
+    pub fast: Vec<FastCheckConfig>,
+    #[serde(default)]
     pub smoke: Vec<SmokeCheckConfig>,
 }
 
@@ -70,6 +72,21 @@ pub struct SmokeCheckConfig {
     pub path: Option<String>,
     pub url: Option<String>,
     pub expect: Option<String>,
+    #[serde(default)]
+    pub expect_all: Vec<String>,
+    #[serde(default)]
+    pub expect_not: Vec<String>,
+    #[serde(default = "default_status")]
+    pub status: u16,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct FastCheckConfig {
+    pub name: Option<String>,
+    pub goto: Option<String>,
+    pub url: Option<String>,
+    pub click: Option<String>,
+    pub expect_text: Option<String>,
     #[serde(default)]
     pub expect_all: Vec<String>,
     #[serde(default)]
@@ -477,10 +494,11 @@ pub fn run_fast_suite(args: &FastArgs) -> Result<()> {
         ))
     })?;
     let config = parse_config(&config_source)?;
+    let checks = collect_fast_checks(&config);
 
-    if config.smoke.is_empty() {
+    if checks.is_empty() {
         return Err(AegisError::new(format!(
-            "config '{}' does not define any [[smoke]] checks",
+            "config '{}' does not define any [[fast]] or [[smoke]] checks",
             args.config.display()
         )));
     }
@@ -488,16 +506,13 @@ pub fn run_fast_suite(args: &FastArgs) -> Result<()> {
     println!("Aegis fast checks started");
     println!("  config: {}", args.config.display());
 
-    for (index, check) in config.smoke.iter().enumerate() {
-        let smoke = smoke_args_from_config(&config, check)?;
+    for (index, check) in checks.iter().enumerate() {
         let label = check
             .name
-            .as_deref()
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("smoke {}", index + 1));
-        let report = run_smoke(&smoke).map_err(|error| {
-            AegisError::new(format!("check '{label}' failed for {}: {error}", smoke.url))
-        })?;
+            .clone()
+            .unwrap_or_else(|| format!("fast {}", index + 1));
+        let report = run_fast_check(&config, check)
+            .map_err(|error| AegisError::new(format!("check '{label}' failed: {error}")))?;
 
         println!(
             "  ok {label}: {} HTTP {} ({} bytes)",
@@ -505,10 +520,7 @@ pub fn run_fast_suite(args: &FastArgs) -> Result<()> {
         );
     }
 
-    println!(
-        "Aegis fast checks passed: {} smoke check(s)",
-        config.smoke.len()
-    );
+    println!("Aegis fast checks passed: {} check(s)", checks.len());
     Ok(())
 }
 
@@ -517,31 +529,78 @@ pub fn parse_config(source: &str) -> Result<AegisConfig> {
         .map_err(|error| AegisError::new(format!("failed to parse aegis config: {error}")))
 }
 
-fn smoke_args_from_config(config: &AegisConfig, check: &SmokeCheckConfig) -> Result<SmokeArgs> {
-    let url = match (check.url.as_deref(), check.path.as_deref()) {
+fn collect_fast_checks(config: &AegisConfig) -> Vec<FastCheckConfig> {
+    let mut checks = config.fast.clone();
+
+    for smoke in &config.smoke {
+        checks.push(FastCheckConfig {
+            name: smoke.name.clone(),
+            goto: smoke.path.clone(),
+            url: smoke.url.clone(),
+            click: None,
+            expect_text: smoke.expect.clone(),
+            expect_all: smoke.expect_all.clone(),
+            expect_not: smoke.expect_not.clone(),
+            status: smoke.status,
+        });
+    }
+
+    checks
+}
+
+fn run_fast_check(config: &AegisConfig, check: &FastCheckConfig) -> Result<SmokeReport> {
+    let first_url = match (check.url.as_deref(), check.goto.as_deref()) {
         (Some(url), None) => url.to_string(),
-        (None, Some(path)) => join_url(
-            config
-                .base_url
-                .as_deref()
-                .ok_or_else(|| AegisError::new("smoke check with path requires base_url"))?,
-            path,
-        ),
+        (None, Some(goto)) => resolve_config_url(config, goto)?,
         (Some(_), Some(_)) => {
             return Err(AegisError::new(
-                "smoke check must use either url or path, not both",
+                "fast check must use either url or goto, not both",
             ));
         }
-        (None, None) => return Err(AegisError::new("smoke check requires url or path")),
+        (None, None) => return Err(AegisError::new("fast check requires url or goto")),
     };
 
-    Ok(SmokeArgs {
-        url,
-        expect_status: check.status,
-        expect_text: check.expect.clone(),
-        expect_all: check.expect_all.clone(),
-        expect_not: check.expect_not.clone(),
+    let mut page = FastPage::new(check.name.as_deref().unwrap_or("fast check"));
+    page.try_goto(&first_url)?;
+    page.try_expect_status(check.status)?;
+
+    if let Some(selector) = check.click.as_deref() {
+        page.try_click(selector)?;
+        page.try_expect_status(check.status)?;
+    }
+
+    if let Some(expected) = check.expect_text.as_deref() {
+        page.try_expect_text(expected)?;
+    }
+
+    for expected in &check.expect_all {
+        page.try_expect_text(expected)?;
+    }
+
+    for unexpected in &check.expect_not {
+        page.try_expect_not(unexpected)?;
+    }
+
+    Ok(SmokeReport {
+        url: page.current_url.clone().unwrap_or(first_url),
+        status: page.current_status.unwrap_or(check.status),
+        body_bytes: page.current_body.len(),
+        matched_text: check.expect_text.clone(),
     })
+}
+
+fn resolve_config_url(config: &AegisConfig, path_or_url: &str) -> Result<String> {
+    if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
+        return Ok(path_or_url.to_string());
+    }
+
+    Ok(join_url(
+        config
+            .base_url
+            .as_deref()
+            .ok_or_else(|| AegisError::new("fast check with relative goto requires base_url"))?,
+        path_or_url,
+    ))
 }
 
 fn join_url(base_url: &str, path: &str) -> String {
@@ -759,27 +818,31 @@ expect_not = ["Internal Server Error"]
     }
 
     #[test]
-    fn builds_smoke_args_from_base_url_and_path() {
-        let config = AegisConfig {
-            base_url: Some("https://react.axonyx.dev/".to_string()),
-            smoke: vec![],
-        };
-        let check = SmokeCheckConfig {
-            name: Some("docs".to_string()),
-            path: Some("/docs/getting-started".to_string()),
-            url: None,
-            expect: Some("Getting Started".to_string()),
-            expect_all: vec!["Docs".to_string()],
-            expect_not: vec!["Internal Server Error".to_string()],
-            status: 200,
-        };
+    fn parses_frontend_friendly_fast_checks() {
+        let config = parse_config(
+            r#"
+base_url = "https://react.axonyx.dev"
 
-        let smoke = smoke_args_from_config(&config, &check).unwrap();
+[[fast]]
+name = "opens docs"
+goto = "/"
+click = "a[href='/docs/getting-started']"
+expect_text = "Getting Started"
+expect_all = ["Axonyx", "Docs"]
+expect_not = ["Internal Server Error"]
+"#,
+        )
+        .unwrap();
 
-        assert_eq!(smoke.url, "https://react.axonyx.dev/docs/getting-started");
-        assert_eq!(smoke.expect_text.as_deref(), Some("Getting Started"));
-        assert_eq!(smoke.expect_all, ["Docs"]);
-        assert_eq!(smoke.expect_not, ["Internal Server Error"]);
+        assert_eq!(config.fast.len(), 1);
+        assert_eq!(
+            config.fast[0].click.as_deref(),
+            Some("a[href='/docs/getting-started']")
+        );
+        assert_eq!(
+            config.fast[0].expect_text.as_deref(),
+            Some("Getting Started")
+        );
     }
 
     #[test]
