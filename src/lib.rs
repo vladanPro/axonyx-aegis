@@ -1,6 +1,4 @@
 use std::fmt;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::time::Duration;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -163,30 +161,21 @@ fn parse_smoke_args(args: Vec<String>) -> Result<SmokeArgs> {
 }
 
 pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
-    let request = parse_http_url(&args.url)?;
-    let mut stream = TcpStream::connect((request.host.as_str(), request.port))
-        .map_err(|error| AegisError::new(format!("failed to connect to {}: {error}", args.url)))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .map_err(|error| AegisError::new(format!("failed to set read timeout: {error}")))?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(10)))
-        .map_err(|error| AegisError::new(format!("failed to set write timeout: {error}")))?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(format!("axonyx-aegis/{VERSION}"))
+        .build()
+        .map_err(|error| AegisError::new(format!("failed to create HTTP client: {error}")))?;
+    let response = client
+        .get(&args.url)
+        .header(reqwest::header::ACCEPT, "text/html,*/*")
+        .send()
+        .map_err(|error| AegisError::new(format!("failed to request {}: {error}", args.url)))?;
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .map_err(|error| AegisError::new(format!("failed to read response body: {error}")))?;
 
-    let request_text = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: axonyx-aegis/{}\r\nAccept: text/html,*/*\r\nConnection: close\r\n\r\n",
-        request.path, request.authority, VERSION
-    );
-    stream
-        .write_all(request_text.as_bytes())
-        .map_err(|error| AegisError::new(format!("failed to write HTTP request: {error}")))?;
-
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .map_err(|error| AegisError::new(format!("failed to read HTTP response: {error}")))?;
-
-    let (status, body) = parse_http_response(&response)?;
     if status != args.expect_status {
         return Err(AegisError::new(format!(
             "expected HTTP {}, got {} for {}",
@@ -208,63 +197,6 @@ pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
         body_bytes: body.len(),
         matched_text: args.expect_text.clone(),
     })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct HttpRequestTarget {
-    host: String,
-    port: u16,
-    authority: String,
-    path: String,
-}
-
-fn parse_http_url(url: &str) -> Result<HttpRequestTarget> {
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or_else(|| AegisError::new("Aegis smoke currently supports http:// URLs only"))?;
-    let (authority, path) = match rest.split_once('/') {
-        Some((authority, path)) => (authority, format!("/{path}")),
-        None => (rest, "/".to_string()),
-    };
-
-    if authority.is_empty() {
-        return Err(AegisError::new("URL host is missing"));
-    }
-
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) if !host.is_empty() => {
-            let port = port
-                .parse::<u16>()
-                .map_err(|_| AegisError::new("URL port must be a valid u16"))?;
-            (host.to_string(), port)
-        }
-        _ => (authority.to_string(), 80),
-    };
-
-    Ok(HttpRequestTarget {
-        host,
-        port,
-        authority: authority.to_string(),
-        path,
-    })
-}
-
-fn parse_http_response(response: &str) -> Result<(u16, &str)> {
-    let (headers, body) = response
-        .split_once("\r\n\r\n")
-        .ok_or_else(|| AegisError::new("HTTP response did not include a header/body split"))?;
-    let status_line = headers
-        .lines()
-        .next()
-        .ok_or_else(|| AegisError::new("HTTP response status line is missing"))?;
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| AegisError::new("HTTP response status code is missing"))?
-        .parse::<u16>()
-        .map_err(|_| AegisError::new("HTTP response status code is invalid"))?;
-
-    Ok((status, body))
 }
 
 fn print_help() {
@@ -328,28 +260,19 @@ mod tests {
     }
 
     #[test]
-    fn parses_http_url_with_port_and_path() {
-        let target = parse_http_url("http://127.0.0.1:3000/components/button").unwrap();
+    fn parses_https_smoke_target() {
+        let command = parse_command([
+            "smoke".to_string(),
+            "--url".to_string(),
+            "https://react.axonyx.dev/docs/getting-started".to_string(),
+        ])
+        .unwrap();
 
-        assert_eq!(target.host, "127.0.0.1");
-        assert_eq!(target.port, 3000);
-        assert_eq!(target.authority, "127.0.0.1:3000");
-        assert_eq!(target.path, "/components/button");
-    }
+        let Command::Smoke(args) = command else {
+            panic!("expected smoke command");
+        };
 
-    #[test]
-    fn rejects_https_for_initial_smoke_runner() {
-        let error = parse_http_url("https://axonyx.dev").unwrap_err();
-
-        assert!(error.to_string().contains("http://"));
-    }
-
-    #[test]
-    fn parses_http_status_and_body() {
-        let response = "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nAxonyx";
-        let (status, body) = parse_http_response(response).unwrap();
-
-        assert_eq!(status, 200);
-        assert_eq!(body, "Axonyx");
+        assert_eq!(args.url, "https://react.axonyx.dev/docs/getting-started");
+        assert_eq!(args.expect_status, 200);
     }
 }

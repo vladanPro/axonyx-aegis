@@ -25,8 +25,8 @@ cargo run -- smoke --url http://127.0.0.1:3000 --expect Axonyx
 cargo run -- browser
 ```
 
-`smoke` currently supports `http://` URLs. HTTPS and a real browser engine are
-reserved for the next phase.
+`smoke` supports both local `http://` URLs and deployed `https://` URLs. A real
+browser engine is reserved for the next phase.
 
 ## Intended Axonyx Integration
 
