@@ -95,6 +95,9 @@ aegis fast --config aegis.toml --format json
 Use `--format json` in CI when you need a machine-readable report with check
 names, final URLs, status codes, and response sizes.
 
+When a JSON run fails, Aegis still exits with a non-zero status code and prints a
+structured report with `passed: false` plus the failed check name and error.
+
 Set `check_links = true` on a `[[fast]]` check when you want Aegis to request
 same-origin links found on the current page and fail on broken HTTP responses.
 External URLs, anchors, `mailto:`, `tel:`, `javascript:`, and `data:` links are

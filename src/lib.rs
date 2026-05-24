@@ -125,6 +125,7 @@ pub struct FastSuiteReport {
     pub passed: bool,
     pub check_count: usize,
     pub checks: Vec<FastCheckReport>,
+    pub failure: Option<FastFailureReport>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -134,6 +135,12 @@ pub struct FastCheckReport {
     pub status: u16,
     pub body_bytes: usize,
     pub matched_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FastFailureReport {
+    pub check: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -186,13 +193,26 @@ fn default_status() -> u16 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AegisError {
     message: String,
+    reported: bool,
 }
 
 impl AegisError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            reported: false,
         }
+    }
+
+    fn reported(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            reported: true,
+        }
+    }
+
+    pub fn was_reported(&self) -> bool {
+        self.reported
     }
 }
 
@@ -735,33 +755,39 @@ pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
 }
 
 pub fn run_fast_suite(args: &FastArgs) -> Result<()> {
-    let report = collect_fast_suite_report(args)?;
+    let report = collect_fast_suite_report(args);
 
-    match args.format {
-        OutputFormat::Text => print_fast_suite_report(&report),
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&report).map_err(|error| {
-                AegisError::new(format!("failed to encode JSON report: {error}"))
-            })?;
-            println!("{json}");
+    match (args.format, report) {
+        (OutputFormat::Text, Ok(report)) => {
+            print_fast_suite_report(&report);
+            Ok(())
+        }
+        (OutputFormat::Json, Ok(report)) => print_fast_json_report(&report),
+        (OutputFormat::Text, Err(error)) => Err(AegisError::new(error.message)),
+        (OutputFormat::Json, Err(error)) => {
+            if let Some(report) = error.report {
+                print_fast_json_report(&report)?;
+                Err(AegisError::reported(error.message))
+            } else {
+                Err(AegisError::new(error.message))
+            }
         }
     }
-
-    Ok(())
 }
 
-pub fn collect_fast_suite_report(args: &FastArgs) -> Result<FastSuiteReport> {
+fn collect_fast_suite_report(args: &FastArgs) -> FastSuiteResult {
     let config_source = fs::read_to_string(&args.config).map_err(|error| {
-        AegisError::new(format!(
+        FastSuiteError::new(format!(
             "failed to read config '{}': {error}",
             args.config.display()
         ))
     })?;
-    let config = parse_config(&config_source)?;
+    let config =
+        parse_config(&config_source).map_err(|error| FastSuiteError::new(error.message))?;
     let checks = collect_fast_checks(&config);
 
     if checks.is_empty() {
-        return Err(AegisError::new(format!(
+        return Err(FastSuiteError::new(format!(
             "config '{}' does not define any [[fast]] or [[smoke]] checks",
             args.config.display()
         )));
@@ -774,8 +800,24 @@ pub fn collect_fast_suite_report(args: &FastArgs) -> Result<FastSuiteReport> {
             .name
             .clone()
             .unwrap_or_else(|| format!("fast {}", index + 1));
-        let report = run_fast_check(&config, check)
-            .map_err(|error| AegisError::new(format!("check '{label}' failed: {error}")))?;
+        let report = match run_fast_check(&config, check) {
+            Ok(report) => report,
+            Err(error) => {
+                return Err(FastSuiteError::with_report(
+                    format!("check '{label}' failed: {error}"),
+                    FastSuiteReport {
+                        config: args.config.display().to_string(),
+                        passed: false,
+                        check_count: reports.len(),
+                        checks: reports,
+                        failure: Some(FastFailureReport {
+                            check: label,
+                            error: error.to_string(),
+                        }),
+                    },
+                ));
+            }
+        };
         reports.push(FastCheckReport {
             name: label,
             url: report.url,
@@ -790,7 +832,38 @@ pub fn collect_fast_suite_report(args: &FastArgs) -> Result<FastSuiteReport> {
         passed: true,
         check_count: reports.len(),
         checks: reports,
+        failure: None,
     })
+}
+
+type FastSuiteResult = std::result::Result<FastSuiteReport, FastSuiteError>;
+
+struct FastSuiteError {
+    message: String,
+    report: Option<FastSuiteReport>,
+}
+
+impl FastSuiteError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            report: None,
+        }
+    }
+
+    fn with_report(message: impl Into<String>, report: FastSuiteReport) -> Self {
+        Self {
+            message: message.into(),
+            report: Some(report),
+        }
+    }
+}
+
+fn print_fast_json_report(report: &FastSuiteReport) -> Result<()> {
+    let json = serde_json::to_string_pretty(report)
+        .map_err(|error| AegisError::new(format!("failed to encode JSON report: {error}")))?;
+    println!("{json}");
+    Ok(())
 }
 
 fn print_fast_suite_report(report: &FastSuiteReport) {
