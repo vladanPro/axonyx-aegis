@@ -86,10 +86,14 @@ Then run:
 
 ```bash
 aegis fast --config aegis.toml
+aegis fast --config aegis.toml --format json
 ```
 
 `aegis test --config aegis.toml` currently works as an alias for `fast`, but
 `fast` is the clearer command when you specifically want no-browser checks.
+
+Use `--format json` in CI when you need a machine-readable report with check
+names, final URLs, status codes, and response sizes.
 
 Set `check_links = true` on a `[[fast]]` check when you want Aegis to request
 same-origin links found on the current page and fail on broken HTTP responses.

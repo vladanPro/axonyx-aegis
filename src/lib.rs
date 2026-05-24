@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
@@ -96,6 +96,13 @@ pub struct SmokeReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastArgs {
     pub config: PathBuf,
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,8 +114,26 @@ impl Default for FastArgs {
     fn default() -> Self {
         Self {
             config: PathBuf::from("aegis.toml"),
+            format: OutputFormat::Text,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FastSuiteReport {
+    pub config: String,
+    pub passed: bool,
+    pub check_count: usize,
+    pub checks: Vec<FastCheckReport>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FastCheckReport {
+    pub name: String,
+    pub url: String,
+    pub status: u16,
+    pub body_bytes: usize,
+    pub matched_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -568,6 +593,13 @@ fn parse_fast_args(args: Vec<String>) -> Result<FastArgs> {
                         .ok_or_else(|| AegisError::new("--config requires a value"))?,
                 );
             }
+            "--format" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| AegisError::new("--format requires a value"))?;
+                fast.format = parse_output_format(value)?;
+            }
             "-h" | "--help" => {
                 print_fast_help();
                 return Ok(fast);
@@ -583,6 +615,16 @@ fn parse_fast_args(args: Vec<String>) -> Result<FastArgs> {
     }
 
     Ok(fast)
+}
+
+fn parse_output_format(value: &str) -> Result<OutputFormat> {
+    match value {
+        "text" => Ok(OutputFormat::Text),
+        "json" => Ok(OutputFormat::Json),
+        other => Err(AegisError::new(format!(
+            "unknown output format '{other}'. Expected 'text' or 'json'."
+        ))),
+    }
 }
 
 fn init_command(args: &InitArgs) -> Result<()> {
@@ -693,6 +735,22 @@ pub fn run_smoke(args: &SmokeArgs) -> Result<SmokeReport> {
 }
 
 pub fn run_fast_suite(args: &FastArgs) -> Result<()> {
+    let report = collect_fast_suite_report(args)?;
+
+    match args.format {
+        OutputFormat::Text => print_fast_suite_report(&report),
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&report).map_err(|error| {
+                AegisError::new(format!("failed to encode JSON report: {error}"))
+            })?;
+            println!("{json}");
+        }
+    }
+
+    Ok(())
+}
+
+pub fn collect_fast_suite_report(args: &FastArgs) -> Result<FastSuiteReport> {
     let config_source = fs::read_to_string(&args.config).map_err(|error| {
         AegisError::new(format!(
             "failed to read config '{}': {error}",
@@ -709,8 +767,7 @@ pub fn run_fast_suite(args: &FastArgs) -> Result<()> {
         )));
     }
 
-    println!("Aegis fast checks started");
-    println!("  config: {}", args.config.display());
+    let mut reports = Vec::new();
 
     for (index, check) in checks.iter().enumerate() {
         let label = check
@@ -719,15 +776,35 @@ pub fn run_fast_suite(args: &FastArgs) -> Result<()> {
             .unwrap_or_else(|| format!("fast {}", index + 1));
         let report = run_fast_check(&config, check)
             .map_err(|error| AegisError::new(format!("check '{label}' failed: {error}")))?;
+        reports.push(FastCheckReport {
+            name: label,
+            url: report.url,
+            status: report.status,
+            body_bytes: report.body_bytes,
+            matched_text: report.matched_text,
+        });
+    }
 
+    Ok(FastSuiteReport {
+        config: args.config.display().to_string(),
+        passed: true,
+        check_count: reports.len(),
+        checks: reports,
+    })
+}
+
+fn print_fast_suite_report(report: &FastSuiteReport) {
+    println!("Aegis fast checks started");
+    println!("  config: {}", report.config);
+
+    for check in &report.checks {
         println!(
-            "  ok {label}: {} HTTP {} ({} bytes)",
-            report.url, report.status, report.body_bytes
+            "  ok {}: {} HTTP {} ({} bytes)",
+            check.name, check.url, check.status, check.body_bytes
         );
     }
 
-    println!("Aegis fast checks passed: {} check(s)", checks.len());
-    Ok(())
+    println!("Aegis fast checks passed: {} check(s)", report.check_count);
 }
 
 pub fn parse_config(source: &str) -> Result<AegisConfig> {
@@ -946,6 +1023,7 @@ fn print_smoke_help() {
 fn print_fast_help() {
     println!("Usage:");
     println!("  aegis fast --config aegis.toml");
+    println!("  aegis fast --config aegis.toml --format json");
 }
 
 fn print_doctor() {
@@ -1014,7 +1092,8 @@ mod tests {
         assert_eq!(
             command,
             Command::Fast(FastArgs {
-                config: PathBuf::from("aegis.toml")
+                config: PathBuf::from("aegis.toml"),
+                format: OutputFormat::Text,
             })
         );
     }
@@ -1033,7 +1112,8 @@ mod tests {
         assert_eq!(
             command,
             Command::Fast(FastArgs {
-                config: PathBuf::from("aegis.toml")
+                config: PathBuf::from("aegis.toml"),
+                format: OutputFormat::Text,
             })
         );
     }
@@ -1050,7 +1130,28 @@ mod tests {
         assert_eq!(
             command,
             Command::Fast(FastArgs {
-                config: PathBuf::from("react.aegis.toml")
+                config: PathBuf::from("react.aegis.toml"),
+                format: OutputFormat::Text,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_fast_json_format_option() {
+        let command = parse_command([
+            "fast".to_string(),
+            "--config".to_string(),
+            "react.aegis.toml".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            command,
+            Command::Fast(FastArgs {
+                config: PathBuf::from("react.aegis.toml"),
+                format: OutputFormat::Json,
             })
         );
     }
