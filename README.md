@@ -106,6 +106,36 @@ skipped.
 Older `[[smoke]]` entries still work as a compatibility alias, but `[[fast]]`
 is the recommended frontend-friendly syntax.
 
+## GitHub Actions
+
+Use Aegis in CI when your `aegis.toml` points at a deployed preview, staging, or
+production URL:
+
+```yaml
+name: Aegis Fast QA
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  aegis-fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install axonyx-aegis --force
+      - run: aegis fast --config aegis.toml --format json
+```
+
+There is a copy-paste workflow template at
+`examples/github-actions/aegis-fast.yml`.
+
+If you want to test a local build in CI, start your app server before the Aegis
+step and point `base_url` at that local address.
+
 ## Fast vs Browser
 
 Use `fast` when you want quick response checks:

@@ -1,0 +1,25 @@
+name: Aegis Fast QA
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  aegis-fast:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Aegis
+        run: cargo install axonyx-aegis --force
+
+      - name: Run Aegis fast checks
+        run: aegis fast --config aegis.toml --format json
