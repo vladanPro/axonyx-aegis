@@ -28,7 +28,7 @@ edition = "2024"
 publish = false
 
 [dev-dependencies]
-axonyx-aegis = "0.1.7"
+axonyx-aegis = "0.1.8"
 "#;
 const INIT_SRC_LIB_RS: &str = "//! Test-only crate for Aegis examples.\n";
 const INIT_TESTS_FAST_RS: &str = "#[path = \"fast/navigation.rs\"]\nmod navigation;\n";
