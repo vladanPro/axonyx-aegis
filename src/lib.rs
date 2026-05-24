@@ -97,6 +97,7 @@ pub struct SmokeReport {
 pub struct FastArgs {
     pub config: PathBuf,
     pub format: OutputFormat,
+    pub fail_fast: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,7 @@ impl Default for FastArgs {
         Self {
             config: PathBuf::from("aegis.toml"),
             format: OutputFormat::Text,
+            fail_fast: true,
         }
     }
 }
@@ -125,6 +127,7 @@ pub struct FastSuiteReport {
     pub passed: bool,
     pub check_count: usize,
     pub checks: Vec<FastCheckReport>,
+    pub failures: Vec<FastFailureReport>,
     pub failure: Option<FastFailureReport>,
 }
 
@@ -620,6 +623,13 @@ fn parse_fast_args(args: Vec<String>) -> Result<FastArgs> {
                     .ok_or_else(|| AegisError::new("--format requires a value"))?;
                 fast.format = parse_output_format(value)?;
             }
+            "--fail-fast" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| AegisError::new("--fail-fast requires true or false"))?;
+                fast.fail_fast = parse_bool_flag("--fail-fast", value)?;
+            }
             "-h" | "--help" => {
                 print_fast_help();
                 return Ok(fast);
@@ -643,6 +653,16 @@ fn parse_output_format(value: &str) -> Result<OutputFormat> {
         "json" => Ok(OutputFormat::Json),
         other => Err(AegisError::new(format!(
             "unknown output format '{other}'. Expected 'text' or 'json'."
+        ))),
+    }
+}
+
+fn parse_bool_flag(name: &str, value: &str) -> Result<bool> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(AegisError::new(format!(
+            "{name} must be true or false; got '{other}'"
         ))),
     }
 }
@@ -794,6 +814,7 @@ fn collect_fast_suite_report(args: &FastArgs) -> FastSuiteResult {
     }
 
     let mut reports = Vec::new();
+    let mut failures = Vec::new();
 
     for (index, check) in checks.iter().enumerate() {
         let label = check
@@ -803,19 +824,30 @@ fn collect_fast_suite_report(args: &FastArgs) -> FastSuiteResult {
         let report = match run_fast_check(&config, check) {
             Ok(report) => report,
             Err(error) => {
-                return Err(FastSuiteError::with_report(
-                    format!("check '{label}' failed: {error}"),
-                    FastSuiteReport {
-                        config: args.config.display().to_string(),
-                        passed: false,
-                        check_count: reports.len(),
-                        checks: reports,
-                        failure: Some(FastFailureReport {
-                            check: label,
-                            error: error.to_string(),
-                        }),
-                    },
-                ));
+                let failure = FastFailureReport {
+                    check: label,
+                    error: error.to_string(),
+                };
+                failures.push(failure);
+
+                if args.fail_fast {
+                    return Err(FastSuiteError::with_report(
+                        format!(
+                            "check '{}' failed: {}",
+                            failures[0].check, failures[0].error
+                        ),
+                        FastSuiteReport {
+                            config: args.config.display().to_string(),
+                            passed: false,
+                            check_count: reports.len(),
+                            checks: reports,
+                            failures: failures.clone(),
+                            failure: failures.first().cloned(),
+                        },
+                    ));
+                }
+
+                continue;
             }
         };
         reports.push(FastCheckReport {
@@ -827,13 +859,24 @@ fn collect_fast_suite_report(args: &FastArgs) -> FastSuiteResult {
         });
     }
 
-    Ok(FastSuiteReport {
+    let passed = failures.is_empty();
+    let report = FastSuiteReport {
         config: args.config.display().to_string(),
-        passed: true,
+        passed,
         check_count: reports.len(),
         checks: reports,
-        failure: None,
-    })
+        failure: failures.first().cloned(),
+        failures,
+    };
+
+    if report.passed {
+        Ok(report)
+    } else {
+        Err(FastSuiteError::with_report(
+            format!("{} fast check(s) failed", report.failures.len()),
+            report,
+        ))
+    }
 }
 
 type FastSuiteResult = std::result::Result<FastSuiteReport, FastSuiteError>;
@@ -877,7 +920,19 @@ fn print_fast_suite_report(report: &FastSuiteReport) {
         );
     }
 
-    println!("Aegis fast checks passed: {} check(s)", report.check_count);
+    for failure in &report.failures {
+        println!("  fail {}: {}", failure.check, failure.error);
+    }
+
+    if report.passed {
+        println!("Aegis fast checks passed: {} check(s)", report.check_count);
+    } else {
+        println!(
+            "Aegis fast checks failed: {} passed, {} failed",
+            report.check_count,
+            report.failures.len()
+        );
+    }
 }
 
 pub fn parse_config(source: &str) -> Result<AegisConfig> {
@@ -1097,6 +1152,7 @@ fn print_fast_help() {
     println!("Usage:");
     println!("  aegis fast --config aegis.toml");
     println!("  aegis fast --config aegis.toml --format json");
+    println!("  aegis fast --config aegis.toml --fail-fast false");
 }
 
 fn print_doctor() {
@@ -1167,6 +1223,7 @@ mod tests {
             Command::Fast(FastArgs {
                 config: PathBuf::from("aegis.toml"),
                 format: OutputFormat::Text,
+                fail_fast: true,
             })
         );
     }
@@ -1187,6 +1244,7 @@ mod tests {
             Command::Fast(FastArgs {
                 config: PathBuf::from("aegis.toml"),
                 format: OutputFormat::Text,
+                fail_fast: true,
             })
         );
     }
@@ -1205,6 +1263,7 @@ mod tests {
             Command::Fast(FastArgs {
                 config: PathBuf::from("react.aegis.toml"),
                 format: OutputFormat::Text,
+                fail_fast: true,
             })
         );
     }
@@ -1225,6 +1284,26 @@ mod tests {
             Command::Fast(FastArgs {
                 config: PathBuf::from("react.aegis.toml"),
                 format: OutputFormat::Json,
+                fail_fast: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_fast_fail_fast_false_option() {
+        let command = parse_command([
+            "fast".to_string(),
+            "--fail-fast".to_string(),
+            "false".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            command,
+            Command::Fast(FastArgs {
+                config: PathBuf::from("aegis.toml"),
+                format: OutputFormat::Text,
+                fail_fast: false,
             })
         );
     }

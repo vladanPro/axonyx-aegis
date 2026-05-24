@@ -87,6 +87,7 @@ Then run:
 ```bash
 aegis fast --config aegis.toml
 aegis fast --config aegis.toml --format json
+aegis fast --config aegis.toml --fail-fast false
 ```
 
 `aegis test --config aegis.toml` currently works as an alias for `fast`, but
@@ -97,6 +98,9 @@ names, final URLs, status codes, and response sizes.
 
 When a JSON run fails, Aegis still exits with a non-zero status code and prints a
 structured report with `passed: false` plus the failed check name and error.
+
+Use `--fail-fast false` when you want Aegis to keep running after a failed
+`[[fast]]` check and report every failure it found in one run.
 
 Set `check_links = true` on a `[[fast]]` check when you want Aegis to request
 same-origin links found on the current page and fail on broken HTTP responses.
