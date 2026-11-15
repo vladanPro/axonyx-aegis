@@ -106,6 +106,12 @@ fn native_keyboard_scroll_works_with_page_scripts_disabled() {
                 .unwrap(),
             "Legura fixture"
         );
+        page.clear_text("#label").unwrap();
+        assert_eq!(
+            page.evaluate("return document.getElementById('label').value", &[])
+                .unwrap(),
+            ""
+        );
         page.close().unwrap();
     }
 }

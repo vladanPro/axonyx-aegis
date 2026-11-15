@@ -159,6 +159,17 @@ impl BrowserPage {
         Ok(())
     }
 
+    /// Clear an editable element using WebDriver's element clear command.
+    pub fn clear_text(&self, selector: &str) -> Result<()> {
+        let element = self.element(selector)?;
+        self.command(
+            Method::POST,
+            &["element", &element, "clear"],
+            Some(json!({})),
+        )?;
+        Ok(())
+    }
+
     pub fn expect_text(&mut self, expected: &str) -> &mut Self {
         let element = self
             .element("body")
