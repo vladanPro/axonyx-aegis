@@ -34,6 +34,7 @@ fn native_keyboard_scroll_works_with_page_scripts_disabled() {
   <div style="width:900px">Posts table</div>
 </div>
 <a href="/next">Next page</a>
+<input id="label" aria-label="Label">
 <script>document.documentElement.setAttribute("data-script-ran", "yes")</script>"#;
         for mut stream in listener.incoming().flatten() {
             use std::io::{BufRead, BufReader};
@@ -99,6 +100,12 @@ fn native_keyboard_scroll_works_with_page_scripts_disabled() {
         }
         page.click("a");
         assert_eq!(page.current_url().unwrap(), format!("{url}/next"));
+        page.type_text("#label", "Legura fixture").unwrap();
+        assert_eq!(
+            page.evaluate("return document.getElementById('label').value", &[])
+                .unwrap(),
+            "Legura fixture"
+        );
         page.close().unwrap();
     }
 }

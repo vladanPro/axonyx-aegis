@@ -148,6 +148,17 @@ impl BrowserPage {
         Ok(())
     }
 
+    /// Type into an editable element using the browser's native input actions.
+    pub fn type_text(&self, selector: &str, text: &str) -> Result<()> {
+        let element = self.element(selector)?;
+        self.command(
+            Method::POST,
+            &["element", &element, "value"],
+            Some(json!({ "text": text })),
+        )?;
+        Ok(())
+    }
+
     pub fn expect_text(&mut self, expected: &str) -> &mut Self {
         let element = self
             .element("body")
