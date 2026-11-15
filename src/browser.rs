@@ -1,4 +1,5 @@
 use crate::{AegisError, Result};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::blocking::Client;
 use reqwest::{Method, Url};
 use serde_json::{Value, json};
@@ -218,6 +219,52 @@ impl BrowserPage {
         if width == 0 || height == 0 {
             return Err(AegisError::new("viewport dimensions must be positive"));
         }
+        self.cdp(
+            "Emulation.setDeviceMetricsOverride",
+            json!({ "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }),
+        )?;
+        Ok(())
+    }
+
+    /// Capture the complete document as PNG without changing the test viewport.
+    pub fn full_page_png(&self) -> Result<Vec<u8>> {
+        let metrics = self.cdp("Page.getLayoutMetrics", json!({}))?;
+        let content = &metrics["cssContentSize"];
+        let viewport = self.evaluate("return { width: innerWidth, height: innerHeight }", &[])?;
+        let dimension = |key: &str| {
+            let dimension = |rect: &Value| {
+                rect[key]
+                    .as_f64()
+                    .map(f64::ceil)
+                    .filter(|value| *value > 0.0)
+                    .ok_or_else(|| {
+                        AegisError::new("browser returned invalid screenshot dimensions")
+                    })
+            };
+            Ok::<_, AegisError>(dimension(content)?.max(dimension(&viewport)?))
+        };
+        let (width, height) = (dimension("width")?, dimension("height")?);
+        let response = self.cdp(
+            "Page.captureScreenshot",
+            json!({
+                "format": "png",
+                "captureBeyondViewport": true,
+                "clip": { "x": 0, "y": 0, "width": width, "height": height, "scale": 1 }
+            }),
+        )?;
+        let encoded = response["data"]
+            .as_str()
+            .ok_or_else(|| AegisError::new("browser returned no screenshot data"))?;
+        let png = STANDARD
+            .decode(encoded)
+            .map_err(|_| AegisError::new("browser returned invalid screenshot encoding"))?;
+        if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Err(AegisError::new("browser returned a non-PNG screenshot"));
+        }
+        Ok(png)
+    }
+
+    fn cdp(&self, method: &str, params: Value) -> Result<Value> {
         let vendor = match self.browser {
             Browser::Chrome => "goog",
             Browser::Edge => "ms",
@@ -225,12 +272,8 @@ impl BrowserPage {
         self.command(
             Method::POST,
             &[vendor, "cdp", "execute"],
-            Some(json!({
-                "cmd": "Emulation.setDeviceMetricsOverride",
-                "params": { "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }
-            })),
-        )?;
-        Ok(())
+            Some(json!({ "cmd": method, "params": params })),
+        )
     }
 
     /// Install a session cookie for the current document's origin.

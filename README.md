@@ -156,6 +156,7 @@ Use the Rust browser test API when the check needs real browser behavior:
 - navigation and visible text
 - checking DOM state with WebDriver evaluation
 - verifying native behavior with page scripts disabled
+- full-page PNG screenshots with `BrowserPage::full_page_png`
 
 ## Rust Test Files
 

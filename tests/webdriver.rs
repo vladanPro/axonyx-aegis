@@ -29,7 +29,7 @@ fn native_keyboard_scroll_works_with_page_scripts_disabled() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     thread::spawn(move || {
-        let html = r#"<!doctype html><title>Aegis browser fixture</title>
+        let html = r#"<!doctype html><title>Aegis browser fixture</title><body style="min-height: 1100px">
 <div id="table" tabindex="0" style="width:150px;overflow-x:auto">
   <div style="width:900px">Posts table</div>
 </div>
@@ -69,6 +69,14 @@ fn native_keyboard_scroll_works_with_page_scripts_disabled() {
         page.goto(&url).expect_text("Posts table");
         page.set_viewport(320, 844).unwrap();
         assert_eq!(page.evaluate("return window.innerWidth", &[]).unwrap(), 320);
+        let png = page.full_page_png().unwrap();
+        let width = u32::from_be_bytes(png[16..20].try_into().unwrap());
+        let height = u32::from_be_bytes(png[20..24].try_into().unwrap());
+        assert_eq!(width, 320);
+        assert!(
+            height >= 1100,
+            "screenshot must include content below the viewport"
+        );
         assert_eq!(
             page.evaluate(
                 "return document.documentElement.hasAttribute('data-script-ran')",
