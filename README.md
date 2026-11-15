@@ -28,9 +28,9 @@ cargo run -- browser
 ```
 
 `fast` runs HTTP/response checks without launching a browser. It is designed for
-quick route, text, status, and deployment checks. A real browser engine is
-reserved for login flows, JavaScript interactions, forms, redirects, screenshots,
-and user journeys.
+quick route, text, status, and deployment checks. The Rust browser test API
+drives Chrome or Edge via a local WebDriver, with no Node or npm dependency.
+The `browser` CLI command currently prints setup instructions only.
 
 ## Init
 
@@ -150,14 +150,12 @@ Use `fast` when you want quick response checks:
 - deployed site is alive
 - generated docs/components are reachable
 
-Use future `browser` checks when the test needs a real user session:
+Use the Rust browser test API when the check needs real browser behavior:
 
-- login form
-- cookies/session redirects
-- client-side navigation
-- dropdowns/modals/theme switchers
-- JavaScript validation
-- screenshots and traces
+- real keyboard input and clicks
+- navigation and visible text
+- checking DOM state with WebDriver evaluation
+- verifying native behavior with page scripts disabled
 
 ## Rust Test Files
 
@@ -202,19 +200,30 @@ Fast tests do not launch a browser. `click` currently supports normal anchor
 navigation such as `a[href='/docs/getting-started']` and follows that link with a
 new HTTP request.
 
-Future browser tests keep the same shape, but will run through a headless
-browser engine:
+Start a local ChromeDriver matching your Chrome installation and set
+`AEGIS_WEBDRIVER_URL` to its origin (for example, `http://127.0.0.1:9515`).
+The browser helper opens a fresh headless Chrome session per test:
 
 ```rust
 #[test]
-fn login() {
-    aegis::browser("login", |page| {
-        page.goto("https://react.axonyx.dev/login");
-        page.click("a[href='/profile/settings']");
-        page.expect_text("Change theme");
+fn opens_docs() {
+    aegis::browser("opens docs", |page| {
+        page.goto("http://127.0.0.1:3000");
+        page.click("a[href='/docs/getting-started']");
+        page.expect_text("Getting Started");
     });
 }
 ```
+
+Use `BrowserPage::connect` with `BrowserOptions` for Edge or for disabling
+page scripts. To run the real browser fixture in this repository:
+
+```sh
+cargo test --locked --test webdriver -- --include-ignored
+```
+
+Set `AEGIS_TEST_BROWSER=edge` for a local EdgeDriver. DOM inspection through
+WebDriver is test-side instrumentation and is not part of the application.
 
 ## Intended Axonyx Integration
 

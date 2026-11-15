@@ -44,7 +44,7 @@ fn opens_docs() {
 "#;
 const INIT_TESTS_BROWSER_RS: &str = "#[path = \"browser/drawer.rs\"]\nmod drawer;\n";
 const INIT_TESTS_BROWSER_DRAWER_RS: &str = r#"#[test]
-#[ignore = "Aegis browser engine is reserved for a future release"]
+#[ignore = "requires a running local ChromeDriver"]
 fn opens_drawer() {
     aegis::browser("opens drawer", |page| {
         page.goto("https://example.com/components/drawer");
@@ -234,10 +234,17 @@ pub fn fast(test_name: &str, test: impl FnOnce(&mut FastPage)) {
     test(&mut page);
 }
 
-pub fn browser(test_name: &str, _test: impl FnOnce(&mut BrowserPage)) {
-    panic!(
-        "Aegis browser test '{test_name}' needs the future headless browser engine. Use aegis::fast for response tests today."
-    );
+mod browser;
+pub use browser::{Browser, BrowserOptions, BrowserPage, Key};
+
+pub fn browser(test_name: &str, test: impl FnOnce(&mut BrowserPage)) {
+    let url = std::env::var("AEGIS_WEBDRIVER_URL")
+        .expect("Set AEGIS_WEBDRIVER_URL to a running local WebDriver");
+    let mut page = BrowserPage::connect(&url, BrowserOptions::default())
+        .unwrap_or_else(|error| panic!("Aegis browser '{test_name}': {error}"));
+    test(&mut page);
+    page.close()
+        .unwrap_or_else(|error| panic!("Aegis browser '{test_name}': {error}"));
 }
 
 pub struct FastPage {
@@ -448,22 +455,6 @@ impl FastPage {
     }
 }
 
-pub struct BrowserPage;
-
-impl BrowserPage {
-    pub fn goto(&mut self, _url: &str) -> &mut Self {
-        self
-    }
-
-    pub fn click(&mut self, _selector: &str) -> &mut Self {
-        self
-    }
-
-    pub fn expect_text(&mut self, _expected: &str) -> &mut Self {
-        self
-    }
-}
-
 pub fn run_from_env() -> Result<()> {
     run(std::env::args().skip(1))
 }
@@ -492,11 +483,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         }
         Command::Fast(args) => run_fast_suite(&args),
         Command::Browser => {
-            println!("Aegis browser engine is reserved for the next phase.");
-            println!("Planned shape:");
-            println!("  aegis browser --url http://127.0.0.1:3000 --check components");
-            println!("  cargo ax test browser");
-            println!("Status: preview placeholder only; no browser was launched.");
+            println!("Run browser checks through the Rust test API with a local WebDriver.");
+            println!("Set AEGIS_WEBDRIVER_URL and run: cargo test --test browser -- --ignored");
+            println!("This command does not launch a browser.");
             Ok(())
         }
     }
@@ -1132,7 +1121,7 @@ fn print_help() {
     println!("  smoke    Run a fast HTTP smoke check against a local site.");
     println!("  fast     Run fast HTTP/response checks from aegis.toml.");
     println!("  test     Alias for fast, kept for convenience.");
-    println!("  browser  Reserved placeholder for the future browser engine.");
+    println!("  browser  Show how to run Rust browser tests.");
 }
 
 fn print_init_help() {
@@ -1159,7 +1148,7 @@ fn print_doctor() {
     println!("Aegis doctor");
     println!("  runner: ok");
     println!("  http smoke: ok");
-    println!("  browser engine: reserved");
+    println!("  browser engine: local WebDriver (Rust test API)");
     println!("  axonyx bridge: planned");
 }
 
